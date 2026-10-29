@@ -3,9 +3,11 @@ use tokio::net::TcpStream;
 use tokio::io::AsyncReadExt;
 use log;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::thread;
 use chrono::Utc;
 use cron::Schedule;
+use crate::server::{Server, ServerStatus};
 
 pub async fn handle_client(mut stream: TcpStream, destination: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Declare buffer to read data from client
@@ -38,10 +40,11 @@ pub async fn handle_client(mut stream: TcpStream, destination: &str) -> Result<(
 }
 
 // Send heartbeats
-pub async fn send_regular_heartbeat(destination: &str) -> Result<(), reqwest::Error> {
-    let expression = "0/10 * * * * *";
+pub async fn send_regular_heartbeat(server: Arc<Server>) -> Result<(), reqwest::Error> {
+    let expression = "0/1 * * * * *";
     let schedule = Schedule::from_str(expression).expect("Failed to parse CRON expression");
     let client = reqwest::Client::new();
+    let destination = &server.addr;
 
     for datetime in schedule.upcoming(Utc) {
         let now = Utc::now();
@@ -58,6 +61,8 @@ pub async fn send_regular_heartbeat(destination: &str) -> Result<(), reqwest::Er
 
         println!("Sending heartbeat to {}", &destination);
         // Send heartbeats
+        let status = Arc::clone(&server.status);
+        let mut stat = status.lock().await;
         match client.get(&heartbeat_url)
             .send()
             .await {
@@ -67,12 +72,21 @@ pub async fn send_regular_heartbeat(destination: &str) -> Result<(), reqwest::Er
 
                     let body = res.text().await?;
                     println!("Body:\n{}", body);
-                } 
+
+                    *stat = ServerStatus::Available;
+                }
                 Err(e) => {
-                    eprintln!("Failed");
+                    eprintln!("{}", e.to_string());
+                    if e.is_connect() {
+                        eprintln!("unavailable");
+                        *stat = ServerStatus::Unavailable;
+                    }
+                    else {
+                        eprintln!("other error");
+                        *stat = ServerStatus::HeartbeatError;
+                    }
                 }
             }
     }
-
     Ok(())
 }
