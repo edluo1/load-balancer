@@ -1,7 +1,6 @@
 mod tcp;
 pub mod server;
 
-use std::cmp::PartialEq;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use log;
@@ -20,12 +19,11 @@ async fn main() -> std::io::Result<()> {
         tokio::spawn(async move {
             match tcp::send_regular_heartbeat(server).await {
                 Ok(()) => {
-                    println!("Heartbeat ended");
+                    log::info!("Heartbeat ended");
                 }
                 Err(e) => {
-                    eprintln!("Heartbeat failed");
-
-                    eprintln!("{}", e.to_string());
+                    log::error!("Heartbeat failed");
+                    log::error!("{}", e.to_string());
                 }
             }
         });
@@ -34,9 +32,9 @@ async fn main() -> std::io::Result<()> {
     loop {
         let (stream, addr) = listener.accept().await?;
 
-        println!("Got connection from {}", addr);
+        log::info!("Got connection from {}", addr);
         let mut server_found = false;
-        while (!server_found) {
+        while !server_found {
             let server_status = server_list[handled_port].status.lock().await;
             if *server_status == ServerStatus::Available {
                 server_found = true;
@@ -46,7 +44,12 @@ async fn main() -> std::io::Result<()> {
                 handled_port = (handled_port + 1) % server_list.len();
             }
         }
-        tcp::handle_client(stream, &*server_list[handled_port].addr).await.expect("Message failed");
+        match tcp::handle_client(stream, &*server_list[handled_port].addr).await {
+            Err(e) => {
+                log::error!("Client error: {}", e);
+            }
+            _ => {}
+        }
         handled_port = (handled_port + 1) % server_list.len();
     }
 }
