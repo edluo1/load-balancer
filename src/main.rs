@@ -2,14 +2,42 @@ mod tcp;
 pub mod server;
 
 use std::sync::Arc;
+use aws_config::BehaviorVersion;
+use aws_config::meta::region::RegionProviderChain;
+use aws_sdk_servicediscovery::Client;
+use aws_sdk_servicediscovery::types::{HealthStatusFilter};
 use tokio::net::TcpListener;
 use log;
 use crate::server::{Server, ServerStatus};
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    let server_list = vec![Arc::new(Server::new("127.0.0.1:3000")), Arc::new(Server::new("127.0.0.1:3001"))];
-    let listener = TcpListener::bind("127.0.0.1:2222").await?;
+
+    let region_provider = RegionProviderChain::default_provider().or_else("us-east-2");
+    let config = aws_config::defaults(BehaviorVersion::latest())
+        .region(region_provider)
+        .load()
+        .await;
+    let client = Client::new(&config);
+
+    // Find instances from client
+    let server_instances = client.discover_instances()
+        .namespace_name("add-two-numbers.com")
+        .service_name("add-two-numbers-service")
+        .health_status(HealthStatusFilter::Healthy)
+        .send()
+        .await;
+
+    let server_list = server_instances.unwrap().instances()
+        .iter().map(|instance| {
+        let attributes = instance.attributes().unwrap();
+        let ip   = attributes.get("AWS_INSTANCE_IPV4").map(|s| s.as_str()).unwrap_or("?");
+        let port = attributes.get("AWS_INSTANCE_PORT").map(|s| s.as_str()).unwrap_or("3000");
+        Arc::new(Server::new(format!("https://{}:{}", ip, port).as_str()))
+        }).collect::<Vec<_>>();
+
+    let listener = TcpListener::bind("0.0.0.0:2222").await?;
+    log::info!("Connected to {} servers", server_list.len());
     log::info!("Server listening on 127.0.0.1:2222");
 
     let mut handled_port: usize = 0;
