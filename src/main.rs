@@ -12,7 +12,8 @@ use crate::server::{Server, ServerStatus};
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .init();
     let region_provider = RegionProviderChain::default_provider().or_else("us-east-2");
     let config = aws_config::defaults(BehaviorVersion::latest())
         .region(region_provider)
@@ -27,22 +28,22 @@ async fn main() -> std::io::Result<()> {
         .health_status(HealthStatusFilter::Healthy)
         .send()
         .await;
-
     let server_list = server_instances.unwrap().instances()
         .iter().map(|instance| {
         let attributes = instance.attributes().unwrap();
         let ip   = attributes.get("AWS_INSTANCE_IPV4").map(|s| s.as_str()).unwrap_or("?");
         let port = attributes.get("AWS_INSTANCE_PORT").map(|s| s.as_str()).unwrap_or("3000");
-        Arc::new(Server::new(format!("https://{}:{}", ip, port).as_str()))
+        Arc::new(Server::new(format!("{}:{}", ip, port).as_str()))
         }).collect::<Vec<_>>();
 
     let listener = TcpListener::bind("0.0.0.0:2222").await?;
     log::info!("Connected to {} servers", server_list.len());
-    log::info!("Server listening on 127.0.0.1:2222");
+    log::info!("Server listening on 0.0.0.0:2222");
 
     let mut handled_port: usize = 0;
 
     for server in &server_list {
+        log::info!("Spawning server heartbeat");
         let server = Arc::clone(server);
         tokio::spawn(async move {
             match tcp::send_regular_heartbeat(server).await {

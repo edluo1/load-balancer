@@ -32,20 +32,25 @@ pub async fn handle_client(mut stream: TcpStream, destination: &str) -> Result<(
     let params = parse_request_line(request_start)?.1;
 
     let endpoint = parse_endpoint(&params);
+    let body;
     log::info!("endpoint: {:?}", endpoint);
-    if endpoint != "/add" {
+    if endpoint == "/" {
+        body = String::from("{\"data\": \"base endpoint\"}");
+    }
+    else if endpoint != "/add" {
         return Err(Box::from(Error::new(ErrorKind::Other, "Invalid endpoint provided")));
     }
+    else {
+        let url = format!("http://{destination}{params}");
 
-    let url = format!("http://{destination}{params}");
+        body = reqwest::get(url)
+            .await?
+            .text()
+            .await?;
+    }
 
-    let body = reqwest::get(url)
-        .await?
-        .text()
-        .await?;
-    
-    let response = body.as_bytes();
-    stream.try_write(response).expect("Failed to write response to client");
+    let http_response = make_http_response(&String::from("HTTP/1.1 200 OK"), &body);
+    stream.try_write(http_response.as_bytes()).expect("Failed to write response to client");
     Ok(())
 }
 
@@ -67,9 +72,21 @@ fn parse_request_line(line: &str) -> Result<(String, String, String), String> {
     Ok((parts[0].to_string(), parts[1].to_string(), parts.get(2).unwrap_or(&"").to_string()))
 }
 
+fn make_http_response(status: &String, content: &String) -> String {
+    let body_bytes = content.as_bytes();
+
+    let mut response = String::new();
+    response.push_str(&format!("{status}\r\n"));
+    response.push_str("Content-Type: application/json\r\n");
+    response.push_str(&format!("Content-Length: {}\r\n", body_bytes.len()));
+    response.push_str("\r\n");
+    response.push_str(&content);
+    response
+}
+
 // Send heartbeats
 pub async fn send_regular_heartbeat(server: Arc<Server>) -> Result<(), reqwest::Error> {
-    let expression = "0/1 * * * * *";
+    let expression = "0/5 * * * * *";
     let schedule = Schedule::from_str(expression).expect("Failed to parse CRON expression");
     let client = reqwest::Client::new();
     let destination = &server.addr;
